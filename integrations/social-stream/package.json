@@ -1,0 +1,22 @@
+{
+  "name": "@buzz/social-stream-connector",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bridge Social Stream Ninja chat into a Buzz channel",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "bin": {
+    "buzz-social-stream": "src/cli.js"
+  },
+  "scripts": {
+    "check": "node --check src/cli.js && node --test",
+    "start": "node src/cli.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

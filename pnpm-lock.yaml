@@ -287,6 +287,12 @@ importers:
         specifier: ^8.0.0
         version: 8.0.16(@types/node@25.6.0)(jiti@2.7.0)(yaml@2.9.0)
 
+  integrations/social-stream:
+    dependencies:
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.1
+
   web:
     dependencies:
       '@fontsource-variable/inter':

@@ -81,6 +81,10 @@ ps:
 logs *ARGS:
     docker compose logs -f {{ARGS}}
 
+# Bridge Social Stream Ninja chat into Buzz (requires SSN_SESSION and BUZZ_PRIVATE_KEY)
+social-stream *ARGS:
+    pnpm --dir integrations/social-stream start -- {{ARGS}}
+
 # ─── Build & Check ───────────────────────────────────────────────────────────
 
 # Build the Rust workspace
@@ -92,7 +96,7 @@ build-release:
     cargo build --workspace --release
 
 # Run repo lint and formatting checks
-check: fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check
+check: fmt-check clippy desktop-check desktop-tauri-fmt-check desktop-tauri-clippy web-check mobile-check social-stream-check
 
 # Format all Rust code
 fmt:
@@ -125,6 +129,11 @@ desktop-fix:
 # Run desktop TS helper unit tests
 desktop-test:
     cd {{desktop_dir}} && pnpm test
+
+# Lint and test the Social Stream connector
+social-stream-check:
+    pnpm exec biome check integrations/social-stream
+    pnpm --filter @buzz/social-stream-connector check
 
 # Run desktop TypeScript checks
 desktop-typecheck:
