@@ -180,7 +180,8 @@ Want a single-node / VPS relay instead of the local-dev stack? Use the productio
 For agents, set `BUZZ_PRIVATE_KEY` and use [`buzz-cli`](crates/buzz-cli) — JSON in, JSON out, designed for LLM tool calls.
 
 To bridge live YouTube, Twitch, and other chat collected by Social Stream Ninja,
-see the [`p2p` / `local-ws` connector](integrations/social-stream/README.md).
+see the [Social Stream connector](integrations/social-stream/README.md) — P2P over
+WebRTC, Social Stream's hosted relay, or a loopback relay.
 
 ---
 
