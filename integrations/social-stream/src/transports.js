@@ -217,7 +217,9 @@ class P2pTransport {
       host: this.config.p2pHost,
     });
     await this.sdk.connect();
+    if (this.stopped) return;
     await this.sdk.joinRoom();
+    if (this.stopped) return;
     await this.sdk.view(this.config.session, {
       audio: false,
       video: false,
@@ -240,15 +242,16 @@ class P2pTransport {
   }
 }
 
-// Tries each transport in order and keeps the first that becomes ready. The
-// order matters: P2P is Social Stream's default, the hosted relay is the
-// standard fallback that works across machines, and the loopback relay comes
-// last because it only exists when the desktop app has explicitly enabled it.
+// Tries each configured transport in order and keeps the first that becomes
+// ready. Hosted WebSocket is intentionally not implicit: it requires a Social
+// Stream API-server toggle, has different privacy properties, and an open
+// public relay socket does not prove that the session is publishing chat there.
 class AutoTransport {
   constructor(config, options = {}) {
     this.config = config;
     this.onStatus = options.onStatus || (() => {});
     this.transportOptions = options.transportOptions || {};
+    this.onExhausted = options.onExhausted || (() => {});
     this.chain = options.chain || [
       {
         kind: "p2p",
@@ -256,14 +259,6 @@ class AutoTransport {
         factory:
           options.p2pFactory ||
           ((transportOptions) => new P2pTransport(config, transportOptions)),
-      },
-      {
-        kind: "hosted-ws",
-        timeoutMs: config.wsConnectTimeoutMs,
-        factory:
-          options.hostedFactory ||
-          ((transportOptions) =>
-            new HostedWebSocketTransport(config, transportOptions)),
       },
       {
         kind: "local-ws",
@@ -285,18 +280,21 @@ class AutoTransport {
   async start(messageHandler) {
     this.messageHandler = messageHandler;
     this.stopped = false;
-    await this.advanceFrom(0, "startup");
+    const selected = await this.advanceFrom(0, "startup");
+    if (!selected) {
+      throw new Error("No Social Stream transport became available.");
+    }
   }
 
   async advanceFrom(startIndex, reason) {
     for (let index = startIndex; index < this.chain.length; index += 1) {
-      if (this.stopped) return;
+      if (this.stopped) return false;
       const step = this.chain[index];
       const transport = step.factory({
         ...this.transportOptions,
         onStatus: this.onStatus,
-        // A transport that drops after being selected hands off to the next
-        // one rather than retrying a peer that has gone away.
+        // P2P uses this to hand off to the configured WebSocket fallback after
+        // its selected peer goes away. WebSocket transports reconnect in place.
         onUnavailable: () =>
           this.switchAfter(index, `${step.kind}-disconnected`),
       });
@@ -304,15 +302,24 @@ class AutoTransport {
       this.activeKind = step.kind;
       this.activeIndex = index;
       try {
-        await transport.start(this.messageHandler);
-        if (typeof transport.waitUntilReady === "function") {
-          await transport.waitUntilReady(step.timeoutMs);
-        }
+        // The deadline covers signaling startup as well as the eventual data
+        // channel/socket readiness. Applying it only after start() returns can
+        // leave auto mode stuck forever in SDK connect/join/view calls.
+        await waitForPromise(
+          (async () => {
+            await transport.start(this.messageHandler);
+            if (typeof transport.waitUntilReady === "function") {
+              await transport.waitUntilReady(step.timeoutMs);
+            }
+          })(),
+          step.timeoutMs,
+          `Timed out starting the ${step.kind} Social Stream transport.`,
+        );
         this.onStatus("transport.selected", {
           transport: step.kind,
           ...(reason === "startup" ? {} : { reason }),
         });
-        return;
+        return true;
       } catch (error) {
         await transport.stop();
         if (this.active === transport) {
@@ -329,6 +336,8 @@ class AutoTransport {
       }
     }
     this.onStatus("transport.exhausted", { reason });
+    if (reason !== "startup") this.onExhausted({ reason });
+    return false;
   }
 
   async switchAfter(index, reason) {

@@ -9,18 +9,19 @@ channel without changing either project's wire protocol.
   This is Social Stream's own default and the preferred mode.
 - `hosted-ws` uses Social Stream's hosted relay (`wss://io.socialstream.ninja/api`)
   — the same endpoint overlay pages use whenever `localserver` is absent. Works
-  across machines and needs no local setup.
+  across machines and needs no local setup. This mode is explicit because Social
+  Stream must also have **Send chat messages to API server** enabled, and opening
+  the relay alone cannot prove that the session is publishing chat there.
 - `local-ws` uses SSApp's loopback WebSocket relay. This only exists when the
   desktop app has explicitly enabled its local server, so most setups do not
   have it.
-- `auto` tries `p2p`, then `hosted-ws`, then `local-ws`, keeping the first that
-  becomes ready. If a selected transport later drops, it resumes the chain from
-  the next entry rather than retrying a peer that has gone away. When every
-  transport fails it emits `transport.exhausted` instead of going quiet.
+- `auto` tries `p2p`, then the configured `local-ws` relay. If the selected P2P
+  peer later drops, it hands off to local WebSocket; a selected WebSocket relay
+  reconnects in place. Startup exits with an error if neither becomes available,
+  and the connector stops cleanly if a later P2P handoff also exhausts the chain.
 
-The hosted relay is tried before the loopback one deliberately: falling back to
-a relay that most users have never enabled means retrying `ECONNREFUSED` forever
-while chat silently stops flowing.
+Hosted relay access is never entered implicitly by `auto`. Select `hosted-ws`
+when that routing and its privacy tradeoff are what you want.
 
 Both WebSocket modes speak the same `{join, out, in}` protocol. Social Stream
 multiplexes page roles over numbered channels and the connector uses the dock
@@ -52,8 +53,10 @@ node integrations/social-stream/src/cli.js \
   --channel YOUR_BUZZ_CHANNEL_UUID
 ```
 
-Use `SSN_PASSWORD` for a protected Social Stream session. Passwords and the
-Buzz private key are intentionally not accepted as command-line arguments.
+`SSN_PASSWORD` applies to P2P rooms only. Social Stream's standardized WebSocket
+relay join frame has no password field, so hosted and local WebSocket modes use
+the session ID as their routing capability. Passwords and the Buzz private key
+are intentionally not accepted as command-line arguments.
 
 For LAN testing, SSApp can be explicitly configured to listen beyond loopback,
 but that relay is neither authenticated nor encrypted. P2P is the recommended

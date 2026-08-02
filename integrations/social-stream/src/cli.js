@@ -13,8 +13,12 @@ function printUsage() {
       "Usage: buzz-social-stream --session SESSION --channel BUZZ_CHANNEL [options]",
       "",
       "Options:",
-      "  --transport auto|p2p|local-ws       Default: auto",
-      "  --local-relay ws://127.0.0.1:3000",
+      "  --transport auto|p2p|hosted-ws|local-ws  Default: auto",
+      "  --local-relay ws://127.0.0.1:3003",
+      "  --hosted-relay wss://io.socialstream.ninja/api",
+      "  --ws-out 3",
+      "  --ws-in 4",
+      "  --ws-timeout-ms 8000",
       "  --p2p-host wss://wss.socialstream.ninja",
       "  --ninja-sdk /path/to/ninjasdk",
       "  --p2p-timeout-ms 12000",
@@ -45,9 +49,15 @@ async function main(argv = process.argv.slice(2), env = process.env) {
       `${JSON.stringify({ type, at: new Date().toISOString(), ...details })}\n`,
     );
   };
-  const transport = createTransport(config, { onStatus: status });
+  let connector = null;
+  const transport = createTransport(config, {
+    onStatus: status,
+    onExhausted: ({ reason }) => {
+      if (connector) void connector.stop(`transport-exhausted:${reason}`);
+    },
+  });
   const publisher = new BuzzCliPublisher(config);
-  const connector = new SocialStreamConnector(config, { transport, publisher });
+  connector = new SocialStreamConnector(config, { transport, publisher });
   process.once("SIGINT", () => connector.stop("SIGINT"));
   process.once("SIGTERM", () => connector.stop("SIGTERM"));
   await connector.start();

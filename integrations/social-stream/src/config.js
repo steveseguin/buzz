@@ -3,7 +3,8 @@
 const VALID_TRANSPORTS = new Set(["auto", "p2p", "hosted-ws", "local-ws"]);
 
 // Social Stream's hosted relay — what overlay pages use whenever `localserver`
-// is absent, and the only WebSocket path that works across machines.
+// is absent. It is explicit-only because it has different setup and privacy
+// properties from the local/LAN relay.
 const DEFAULT_HOSTED_RELAY_URL = "wss://io.socialstream.ninja/api";
 // Social Stream multiplexes roles over numbered channels; 3/4 is the dock
 // (chat consumer) pair. Overridable because other page roles use other pairs.

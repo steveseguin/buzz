@@ -119,52 +119,56 @@ function fakeTransport(name, calls, { failStart = false } = {}) {
   };
 }
 
-test("auto transport prefers the hosted relay over the loopback relay", async () => {
-  const calls = [];
-  const hosted = fakeTransport("hosted", calls);
-  const transport = new AutoTransport(baseConfig(), {
-    p2pFactory: () => fakeTransport("p2p", calls, { failStart: true }),
-    hostedFactory: () => hosted,
-    localFactory: () => fakeTransport("local", calls),
-  });
-  await transport.start(() => {});
-  // The loopback relay is never touched — most users have never enabled it.
-  assert.deepStrictEqual(calls, ["p2p.start", "p2p.stop", "hosted.start"]);
-  assert.strictEqual(transport.active, hosted);
-  assert.strictEqual(transport.activeKind, "hosted-ws");
-  await transport.stop();
-});
-
-test("auto transport falls through to the local relay only when hosted also fails", async () => {
+test("auto transport falls back directly from P2P to the configured local relay", async () => {
   const calls = [];
   const local = fakeTransport("local", calls);
   const transport = new AutoTransport(baseConfig(), {
     p2pFactory: () => fakeTransport("p2p", calls, { failStart: true }),
-    hostedFactory: () => fakeTransport("hosted", calls, { failStart: true }),
+    hostedFactory: () => {
+      throw new Error("hosted relay must not be implicit");
+    },
     localFactory: () => local,
   });
   await transport.start(() => {});
-  assert.deepStrictEqual(calls, [
-    "p2p.start",
-    "p2p.stop",
-    "hosted.start",
-    "hosted.stop",
-    "local.start",
-  ]);
+  assert.deepStrictEqual(calls, ["p2p.start", "p2p.stop", "local.start"]);
+  assert.strictEqual(transport.active, local);
+  assert.strictEqual(transport.activeKind, "local-ws");
+  await transport.stop();
+});
+
+test("auto transport applies its deadline to a transport whose start never resolves", async () => {
+  const calls = [];
+  const local = fakeTransport("local", calls);
+  const transport = new AutoTransport(baseConfig({ p2pTimeoutMs: 20 }), {
+    p2pFactory: () => ({
+      async start() {
+        calls.push("p2p.start");
+        await new Promise(() => {});
+      },
+      async stop() {
+        calls.push("p2p.stop");
+      },
+    }),
+    localFactory: () => local,
+  });
+  await transport.start(() => {});
+  assert.deepStrictEqual(calls, ["p2p.start", "p2p.stop", "local.start"]);
   assert.strictEqual(transport.active, local);
   await transport.stop();
 });
 
-test("auto transport reports exhaustion instead of silently doing nothing", async () => {
+test("auto transport reports exhaustion and rejects startup", async () => {
   const calls = [];
   const statuses = [];
   const transport = new AutoTransport(baseConfig(), {
     onStatus: (type, details) => statuses.push({ type, ...details }),
     p2pFactory: () => fakeTransport("p2p", calls, { failStart: true }),
-    hostedFactory: () => fakeTransport("hosted", calls, { failStart: true }),
     localFactory: () => fakeTransport("local", calls, { failStart: true }),
   });
-  await transport.start(() => {});
+  await assert.rejects(
+    transport.start(() => {}),
+    /No Social Stream transport became available/,
+  );
   assert.ok(
     statuses.some((entry) => entry.type === "transport.exhausted"),
     `expected transport.exhausted, got ${JSON.stringify(statuses.map((s) => s.type))}`,
@@ -182,16 +186,31 @@ test("a dropped transport hands off to the next one in the chain", async () => {
       dropP2p = options.onUnavailable;
       return fakeTransport("p2p", calls);
     },
-    hostedFactory: () => fakeTransport("hosted", calls, { failStart: true }),
     localFactory: () => local,
   });
   await transport.start(() => {});
   assert.strictEqual(transport.activeKind, "p2p");
   await dropP2p();
   assert.strictEqual(transport.activeKind, "local-ws");
-  assert.ok(
-    calls.includes("hosted.start"),
-    "hosted relay should be tried first",
-  );
+  assert.strictEqual(calls.includes("hosted.start"), false);
+  await transport.stop();
+});
+
+test("runtime exhaustion invokes the connector shutdown callback", async () => {
+  const calls = [];
+  const exhausted = [];
+  let dropP2p = () => {};
+  const transport = new AutoTransport(baseConfig(), {
+    onExhausted: (details) => exhausted.push(details),
+    p2pFactory: (options) => {
+      dropP2p = options.onUnavailable;
+      return fakeTransport("p2p", calls);
+    },
+    localFactory: () => fakeTransport("local", calls, { failStart: true }),
+  });
+  await transport.start(() => {});
+  await dropP2p();
+  assert.deepStrictEqual(exhausted, [{ reason: "p2p-disconnected" }]);
+  assert.strictEqual(transport.active, null);
   await transport.stop();
 });
