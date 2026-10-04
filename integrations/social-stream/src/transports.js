@@ -290,13 +290,30 @@ class AutoTransport {
     for (let index = startIndex; index < this.chain.length; index += 1) {
       if (this.stopped) return false;
       const step = this.chain[index];
+      let selected = false;
+      let unavailableError = null;
+      let rejectUnavailable;
+      const unavailable = new Promise((_, reject) => {
+        rejectUnavailable = reject;
+      });
       const transport = step.factory({
         ...this.transportOptions,
         onStatus: this.onStatus,
         // P2P uses this to hand off to the configured WebSocket fallback after
         // its selected peer goes away. WebSocket transports reconnect in place.
-        onUnavailable: () =>
-          this.switchAfter(index, `${step.kind}-disconnected`),
+        onUnavailable: () => {
+          if (this.stopped || this.active !== transport) return;
+          unavailableError = new Error(
+            `${step.kind} disconnected before it became available.`,
+          );
+          if (!selected) {
+            // Let the existing startup loop advance. Starting a second loop
+            // here can create two fallbacks and orphan the first connection.
+            rejectUnavailable(unavailableError);
+            return;
+          }
+          return this.switchAfter(index, `${step.kind}-disconnected`);
+        },
       });
       this.active = transport;
       this.activeKind = step.kind;
@@ -306,15 +323,21 @@ class AutoTransport {
         // channel/socket readiness. Applying it only after start() returns can
         // leave auto mode stuck forever in SDK connect/join/view calls.
         await waitForPromise(
-          (async () => {
-            await transport.start(this.messageHandler);
-            if (typeof transport.waitUntilReady === "function") {
-              await transport.waitUntilReady(step.timeoutMs);
-            }
-          })(),
+          Promise.race([
+            (async () => {
+              await transport.start(this.messageHandler);
+              if (typeof transport.waitUntilReady === "function") {
+                await transport.waitUntilReady(step.timeoutMs);
+              }
+            })(),
+            unavailable,
+          ]),
           step.timeoutMs,
           `Timed out starting the ${step.kind} Social Stream transport.`,
         );
+        if (this.stopped || this.active !== transport) return false;
+        if (unavailableError) throw unavailableError;
+        selected = true;
         this.onStatus("transport.selected", {
           transport: step.kind,
           ...(reason === "startup" ? {} : { reason }),

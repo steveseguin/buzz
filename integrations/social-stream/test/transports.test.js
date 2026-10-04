@@ -214,3 +214,109 @@ test("runtime exhaustion invokes the connector shutdown callback", async () => {
   assert.strictEqual(transport.active, null);
   await transport.stop();
 });
+
+test("a P2P disconnect during startup opens only one fallback", async () => {
+  const locals = [];
+  class DisconnectingSdk extends EventEmitter {
+    async connect() {}
+    async joinRoom() {}
+    async view() {
+      queueMicrotask(() => this.emit("peerDisconnected", {}));
+    }
+    async disconnect() {}
+  }
+  const transport = new AutoTransport(baseConfig({ p2pTimeoutMs: 20 }), {
+    transportOptions: { SdkConstructor: DisconnectingSdk },
+    localFactory: () => {
+      const local = {
+        stopped: false,
+        async start() {},
+        async stop() {
+          this.stopped = true;
+        },
+      };
+      locals.push(local);
+      return local;
+    },
+  });
+  await transport.start(() => {});
+  await transport.stop();
+  assert.strictEqual(
+    locals.length,
+    1,
+    "startup and disconnect must share one fallback loop",
+  );
+  assert.ok(
+    locals.every((local) => local.stopped),
+    "shutdown must close every opened fallback",
+  );
+});
+
+test("a readiness/disconnect race does not select an unavailable transport", async () => {
+  const calls = [];
+  const selected = [];
+  let dropP2p;
+  const local = fakeTransport("local", calls);
+  const transport = new AutoTransport(baseConfig(), {
+    onStatus: (type, details) => {
+      if (type === "transport.selected") selected.push(details.transport);
+    },
+    p2pFactory: (options) => {
+      dropP2p = options.onUnavailable;
+      return {
+        async start() {},
+        async waitUntilReady() {
+          queueMicrotask(dropP2p);
+        },
+        async stop() {},
+      };
+    },
+    localFactory: () => local,
+  });
+  await transport.start(() => {});
+  assert.deepStrictEqual(selected, ["local-ws"]);
+  await dropP2p();
+  assert.strictEqual(
+    transport.active,
+    local,
+    "stale P2P events cannot replace the fallback",
+  );
+  await transport.stop();
+});
+
+test("stopping during startup cannot select a late-ready transport", async () => {
+  let ready;
+  let started;
+  const startup = new Promise((resolve) => {
+    started = resolve;
+  });
+  const readiness = new Promise((resolve) => {
+    ready = resolve;
+  });
+  const selected = [];
+  const transport = new AutoTransport(baseConfig(), {
+    onStatus: (type, details) => {
+      if (type === "transport.selected") selected.push(details.transport);
+    },
+    p2pFactory: () => ({
+      async start() {
+        started();
+      },
+      waitUntilReady: () => readiness,
+      async stop() {},
+    }),
+    localFactory: () => {
+      throw new Error("must not open fallback after shutdown");
+    },
+  });
+  const starting = transport.start(() => {});
+  const rejected = assert.rejects(
+    starting,
+    /No Social Stream transport became available/,
+  );
+  await startup;
+  await transport.stop();
+  ready();
+  await rejected;
+  assert.deepStrictEqual(selected, []);
+});
